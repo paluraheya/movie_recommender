@@ -14,7 +14,7 @@ Program ini mengimplementasikan sistem rekomendasi film menggunakan:
 | User Similarity | `CollaborativeFilter.cosine_similarity()` |
 | Rekomendasi | Collaborative Filtering (weighted average rating) |
 | Dataset | MovieLens Small (`ratings.csv`, `movies.csv`) |
-| GUI | Tkinter + Matplotlib embedded |
+| GUI | PyQt5 + Matplotlib embedded (dengan fitur Light/Dark Mode) |
 
 Terinspirasi dari paper:
 > *"User profile correlation-based similarity (UPCSim) algorithm in movie recommendation system"*
@@ -29,7 +29,7 @@ movie_recommender/
 ├── graph_ds.py      ← Kelas BipartiteGraph (adjacency list)
 ├── algorithms.py    ← Kelas BFSTraversal + CollaborativeFilter
 ├── data_loader.py   ← Kelas DataLoader (MovieLens / sample data)
-├── gui_app.py       ← Kelas MovieRecommenderApp (Tkinter GUI)
+├── gui_app.py       ← Kelas MovieRecommenderApp (PyQt5 GUI)
 ├── requirements.txt ← Dependensi Python
 └── README.md        ← Dokumentasi ini
 ```
@@ -58,16 +58,13 @@ python main.py
 
 ## Cara Menggunakan GUI
 
-1. Tunggu loading selesai (lihat status bar di bawah).
-2. Masukkan **User ID** di kolom input (contoh: `1`, `5`, `12`).
-3. Tekan tombol **🚀 Generate Recommendation**.
-4. Lihat hasil:
-   - **Similar Users** — user yang punya selera mirip (BFS + cosine sim)
-   - **Top 5 Rekomendasi** — film yang direkomendasikan beserta skor
-   - **Graph Visualization** — bipartite graph relasi user–movie
-   - **Adjacency List** — representasi teks struktur graph
-5. Gunakan fitur **Cari Film** untuk menelusuri film yang sudah ditonton user.
-6. Tekan **🔄 Reset** untuk mulai ulang.
+1. **Login Screen**: Tunggu loading dataset selesai, kemudian masukkan **User ID** di kolom input (contoh: `1`, `5`, `12`) dan klik **Login & Generate**.
+2. **Dashboard Utama**:
+   - Tab **Recommendations** menampilkan Top 5 Rekomendasi Film dan daftar seluruh film yang sudah pernah ditonton (bisa difilter lewat pencarian).
+   - Sidebar sebelah kiri menampilkan daftar **Similar Users** secara dinamis beserta metrik kemiripannya.
+   - Tab **Graph Visualization** menampilkan graf bipartite interaktif (Target User, Similar Users, Watched, dan Recommended Movies).
+   - Tab **Adjacency List** menampilkan teks graf secara terstruktur.
+3. Fitur Tambahan: Terdapat fitur interaktif untuk mengganti tema (**Dark Mode** / **Light Mode**) di pojok kiri bawah, dan tombol **Switch User** untuk kembali ke halaman login.
 
 ---
 
@@ -170,15 +167,11 @@ Iterasi 2 — proses film_A (depth=1):
 
 ## Kustomisasi Tampilan
 
-Semua konfigurasi tampilan ada di class `MovieRecommenderApp` (file `gui_app.py`).
-Cari komentar `=== STYLING ===` untuk menemukan bagian yang bisa diubah:
+Aplikasi ini menggunakan **PyQt5** dan mendukung tema dinamis secara langsung lewat *Stylesheet* (QSS). Konfigurasi warna berpusat pada dictionaries global (file `gui_app.py`):
 
-- **Warna** → konstanta `BG_COLOR`, `ACCENT`, `SUCCESS`, dll.
-- **Font** → konstanta `FONT_APP_TITLE`, `FONT_NORMAL`, dll.
-- **Ukuran Window** → konstanta `WIN_W`, `WIN_H`
-- **Lebar Panel** → konstanta `LEFT_W`, `RIGHT_W`
-- **Grafik Matplotlib** → parameter `figsize` di `_build_right_panel()`
-- **Warna Node/Edge** → variabel `C_TARGET`, `C_MOVIE`, `C_EDGE_HI` di `_draw_graph()`
+- **THEME_LIGHT** dan **THEME_DARK**: Menyimpan token warna untuk background, text primer/sekunder, borders, dsb.
+- Fungsi **get_qss(P)** akan me-render seluruh *stylesheet* untuk antarmuka.
+- Untuk mengubah visual *node* & *edge* di Matplotlib, modifikasi variabel `C_TARGET`, `C_SIMILAR`, `C_REC`, dan `C_WATCHED` di dalam fungsi `draw_graph()`.
 
 ---
 
@@ -189,7 +182,7 @@ Cari komentar `=== STYLING ===` untuk menemukan bagian yang bisa diubah:
 | `pandas` | 1.5.0 | Baca file CSV dataset |
 | `numpy` | 1.23.0 | Komputasi vektor (cosine sim) |
 | `matplotlib` | 3.6.0 | Visualisasi graph di GUI |
-| `tkinter` | bawaan Python | GUI utama |
+| `PyQt5` | 5.15.0 | GUI utama yang dinamis & modern |
 | `collections` | bawaan Python | `deque` untuk BFS |
 
 > Tidak menggunakan library ML tingkat tinggi (TensorFlow, Surprise, PyTorch, NetworkX).
