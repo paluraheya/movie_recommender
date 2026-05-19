@@ -106,7 +106,7 @@ Sort Descending → Tampilkan Top-5
 
 ## Penjelasan Struktur Data Utama
 
-### Weighted Bipartite Graph (Adjacency List)
+### Weighted Graph (Adjacency List)
 
 ```python
 # Contoh struktur internal:
@@ -129,7 +129,7 @@ movie_graph = {
 
 ---
 
-### BFS pada Bipartite Graph
+### BFS pada Graph
 
 ```
 Queue awal: [(user_1, 'user', depth=0)]
