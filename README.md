@@ -9,7 +9,7 @@ Program ini mengimplementasikan sistem rekomendasi film menggunakan:
 
 | Konsep | Implementasi |
 |---|---|
-| Weighted Bipartite Graph | `BipartiteGraph` (adjacency list via `dict`) |
+| Weighted Graph | `BipartiteGraph` (adjacency list via `dict`) |
 | Graph Traversal | `BFSTraversal` (BFS depth-2, `collections.deque`) |
 | User Similarity | `CollaborativeFilter.cosine_similarity()` |
 | Rekomendasi | Collaborative Filtering (weighted average rating) |
@@ -106,7 +106,7 @@ Sort Descending → Tampilkan Top-5
 
 ## Penjelasan Struktur Data Utama
 
-### Weighted Bipartite Graph (Adjacency List)
+### Weighted Graph (Adjacency List)
 
 ```python
 # Contoh struktur internal:
@@ -129,7 +129,7 @@ movie_graph = {
 
 ---
 
-### BFS pada Bipartite Graph
+### BFS pada Graph
 
 ```
 Queue awal: [(user_1, 'user', depth=0)]
