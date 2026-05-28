@@ -71,35 +71,81 @@ python main.py
 ## Alur Algoritma (Flow Program)
 
 ```
-Load Dataset CSV (pandas)
+```text
+Load Dataset CSV (ratings.csv & movies.csv)
+menggunakan pandas
+        │
+        ▼
+Preprocessing Data
+- membaca data user, movie, dan rating
+- menghubungkan movieId dengan title film
+- filtering dataset (optional)
         │
         ▼
 Build Weighted Bipartite Graph
-  graph[user][movie] = rating
+Representasi:
+User ↔ Movie
+
+Edge weight:
+rating user terhadap movie
+
+Struktur:
+user_graph[user][movie] = rating
+movie_graph[movie][user] = rating
         │
         ▼
-Input User ID
+Input Target User ID
+(user yang akan diberikan rekomendasi)
         │
         ▼
-BFS Traversal (depth=2)
-  Level 0: target_user
-  Level 1: movie yang ditonton target_user
-  Level 2: user lain yang menonton movie yang sama
+BFS Traversal untuk Mencari Similar Users
+Depth 0:
+target_user
+
+Depth 1:
+movie yang ditonton target_user
+
+Depth 2:
+user lain yang menonton movie yang sama
+
+Tujuan:
+mencari candidate similar users
         │
         ▼
-Hitung Cosine Similarity
-  sim(u,v) = (u·v) / (‖u‖ × ‖v‖)
+Hitung Cosine Similarity antar User
+Menggunakan rating vector dari movie yang overlap
+
+sim(u,v) = (u·v) / (||u|| × ||v||)
+
+Output:
+nilai similarity tiap candidate user
         │
         ▼
-BFS Candidate Movies
-  Film yang ditonton similar users tapi BELUM ditonton target user
+Seleksi Candidate Movies
+Mengambil:
+movie yang ditonton similar users
+tetapi BELUM ditonton target_user
         │
         ▼
 Hitung Recommendation Score
-  score = Σ(sim × rating) / Σ|sim|
+Menggunakan weighted average:
+
+score(movie) =
+Σ(similarity × rating)
+/
+Σ|similarity|
+
+Tujuan:
+menghitung seberapa layak movie direkomendasikan
         │
         ▼
-Sort Descending → Tampilkan Top-5
+Sorting Recommendation Score
+Urut descending berdasarkan score tertinggi
+        │
+        ▼
+Output Top-5 Recommendation
+```
+
 ```
 
 ---
