@@ -1,26 +1,3 @@
-# ============================================================================
-# data_loader.py — Memuat Dataset MovieLens & Membangun Graph
-# ============================================================================
-#
-# Dataset yang digunakan: MovieLens Small
-#   URL    : https://grouplens.org/datasets/movielens/latest/
-#   File   : ml-latest-small.zip
-#
-# Struktur file CSV:
-#   ratings.csv : userId, movieId, rating, timestamp
-#   movies.csv  : movieId, title, genres
-#
-# Jika file tidak ditemukan, program otomatis menggunakan
-# sample dataset bawaan (50 user, 30 film populer).
-#
-# CARA MENGGUNAKAN DATASET MOVIELENS ASLI:
-#   1. Download ml-latest-small.zip dari link di atas.
-#   2. Ekstrak ke folder yang sama dengan file .py ini.
-#   3. Pastikan folder bernama "ml-latest-small".
-#   4. Jalankan program — data akan otomatis terdeteksi.
-#
-# Kompleksitas build_graph: O(R)  R = jumlah baris rating
-# ============================================================================
 
 import os
 import pandas as pd
@@ -29,12 +6,8 @@ from graph_ds import BipartiteGraph
 
 
 class DataLoader:
-    """
-    Memuat dataset MovieLens (atau sample data) dan
-    membangun Weighted Bipartite Graph darinya.
-    """
+    
 
-    # Folder default dataset MovieLens small
     DEFAULT_DIR = '.'
 
     def __init__(self, data_dir: str = None):
@@ -42,17 +15,8 @@ class DataLoader:
         self.ratings_df = None
         self.movies_df  = None
 
-    # ──────────────────────────────────────────────────────────────────────
-    # Load Data
-    # ──────────────────────────────────────────────────────────────────────
-
     def load_data(self) -> tuple:
-        """
-        Memuat ratings.csv dan movies.csv dari data_dir.
-        Jika file tidak ada, buat sample dataset bawaan.
-
-        Returns: (ratings_df, movies_df)
-        """
+        
         ratings_path = os.path.join(self.data_dir, 'ratings.csv')
         movies_path = os.path.join(self.data_dir, 'movies.csv')
 
@@ -84,24 +48,11 @@ class DataLoader:
 
     
 
-    # ──────────────────────────────────────────────────────────────────────
-    # Build Graph
-    # ──────────────────────────────────────────────────────────────────────
-
+    
     def build_graph(self, graph: BipartiteGraph,
-                    max_users: int = 20,
+                    max_users: int = 50,
                     max_movies: int = None) -> BipartiteGraph:
-        """
-        Membangun Weighted Bipartite Graph dari DataFrame rating.
-
-        Setiap baris di ratings.csv menjadi satu edge di graph:
-            userId ──(rating)──► movieId
-
-        Parameter max_users membatasi jumlah user untuk menjaga
-        performa GUI saat demo/presentasi.
-
-        Kompleksitas: O(R)  R = jumlah baris rating yang diproses
-        """
+        
        
 
         if self.ratings_df is None or self.movies_df is None:

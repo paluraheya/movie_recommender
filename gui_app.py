@@ -1,14 +1,11 @@
-# ============================================================================
-# gui_app.py — Antarmuka GUI PyQt5 (Light/Dark Mode Dashboard)
-# ============================================================================
-
 import sys
 import math
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QFrame, QScrollArea, QTextEdit,
     QSizePolicy, QGridLayout, QGraphicsDropShadowEffect,
-    QProgressBar, QStackedWidget, QMessageBox
+    QProgressBar, QStackedWidget, QMessageBox,
+    QDialog, QTableWidget, QTableWidgetItem, QHeaderView
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import (
@@ -23,18 +20,58 @@ import matplotlib.patches as mpatches
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
-# ── Conditional imports (ubah path sesuai project Anda) ─────────────────────
+
 try:
-    from graph_ds    import BipartiteGraph
+    from graph_ds    import BipartiteGraph, merge_sort
     from algorithms  import BFSTraversal, CollaborativeFilter
     from data_loader import DataLoader
     _DEMO_MODE = False
 except ImportError:
     _DEMO_MODE = True
+    def merge_sort(iterable_or_list, key=None, reverse=False, in_place=False):
+        if key is None:
+            key = lambda x: x
+        def _merge_sort(arr):
+            if len(arr) <= 1:
+                return arr
+            mid = len(arr) // 2
+            left = _merge_sort(arr[:mid])
+            right = _merge_sort(arr[mid:])
+            return _merge(left, right)
+        def _merge(left, right):
+            result = []
+            i = j = 0
+            while i < len(left) and j < len(right):
+                val_left = key(left[i])
+                val_right = key(right[j])
+                if reverse:
+                    if val_left >= val_right:
+                        result.append(left[i])
+                        i += 1
+                    else:
+                        result.append(right[j])
+                        j += 1
+                else:
+                    if val_left <= val_right:
+                        result.append(left[i])
+                        i += 1
+                    else:
+                        result.append(right[j])
+                        j += 1
+            result.extend(left[i:])
+            result.extend(right[j:])
+            return result
+        arr_list = list(iterable_or_list)
+        sorted_list = _merge_sort(arr_list)
+        if in_place:
+            if not isinstance(iterable_or_list, list):
+                raise TypeError("in_place=True requires a list")
+            iterable_or_list[:] = sorted_list
+            return None
+        else:
+            return sorted_list
 
-# ============================================================================
-# DEMO STUBS  (aktif jika modul project belum tersedia)
-# ============================================================================
+
 if _DEMO_MODE:
     import random, time
 
@@ -66,7 +103,7 @@ if _DEMO_MODE:
         def get_user_movies(self, u): return self._ratings.get(u, {})
         def get_user_top_movies(self, u, top_n=10):
             movies = self._ratings.get(u, {})
-            top = sorted(movies.items(), key=lambda x: -x[1])[:top_n]
+            top = merge_sort(movies.items(), key=lambda x: -x[1])[:top_n]
             return [(mid, self.movie_info.get(mid,{}).get('title',f'Movie {mid}'), r) for mid,r in top]
         def get_adjacency_list_str(self, u, limit=12):
             movies = list(self._ratings.get(u, {}).items())[:limit]
@@ -94,21 +131,33 @@ if _DEMO_MODE:
     class _DemoCF:
         def __init__(self, g): self.g = g
         def get_top_similar_users(self, uid, candidates, top_k=10):
-            return sorted(
+            return merge_sort(
                 [(u, round(random.uniform(0.15, 0.52), 4)) for u in list(candidates)[:top_k]],
                 key=lambda x: -x[1]
             )
         def get_recommendations(self, uid, sim_scores, candidates, top_n=5):
-            items = sorted(candidates.items(), key=lambda x: -x[1])[:top_n]
+            items = merge_sort(candidates.items(), key=lambda x: -x[1])[:top_n]
             res = []
             for mid, score in items:
                 info = self.g.movie_info.get(mid, {})
+                contributors = []
+                for _ in range(random.randint(2, 5)):
+                    sim = random.uniform(0.15, 0.52)
+                    rating = random.randint(3, 5)
+                    contributors.append({
+                        'user_id': random.randint(1, 50),
+                        'rating': rating,
+                        'similarity': round(sim, 4),
+                        'contribution': round(sim * rating, 4)
+                    })
+                contributors = merge_sort(contributors, key=lambda c: c['contribution'], reverse=True)
                 res.append({
                     'movie_id': mid,
                     'title': info.get('title', f'Movie {mid}'),
                     'genres': info.get('genres', 'Unknown'),
                     'score': 5.0,
-                    'rated_by': random.randint(2, 10)
+                    'rated_by': len(contributors),
+                    'contributors': contributors
                 })
             return res
 
@@ -153,9 +202,7 @@ THEME_DARK = {
     "is_dark":      True
 }
 
-# ============================================================================
 # GLOBAL STYLESHEET GENERATOR
-# ============================================================================
 def get_qss(P):
     return f"""
     QMainWindow, QWidget {{
@@ -316,10 +363,7 @@ def make_shadow(color="#000000", blur=15, x_off=0, y_off=2, alpha=20):
     eff.setOffset(x_off, y_off)
     return eff
 
-# ============================================================================
 # CUSTOM WIDGETS
-# ============================================================================
-
 class NavButton(QPushButton):
     def __init__(self, text, icon_path="", parent=None):
         super().__init__(parent)
@@ -336,8 +380,14 @@ class NavButton(QPushButton):
         self.style().polish(self)
 
 class RecCard(QFrame):
-    def __init__(self, title, genres, score, parent=None):
+    def __init__(self, rec_data, parent=None):
         super().__init__(parent)
+        self.rec_data = rec_data
+        self.on_click_callback = None
+        self.setCursor(Qt.PointingHandCursor)
+        title = rec_data.get('title', '')
+        genres = rec_data.get('genres', '')
+        score = rec_data.get('score', 0.0)
         self.setFixedHeight(100)
         self.setProperty("cssClass", "card")
         self.setGraphicsEffect(make_shadow(blur=10, alpha=15))
@@ -390,6 +440,10 @@ class RecCard(QFrame):
         sb_lay.addWidget(s_lbl2)
 
         lay.addWidget(score_box)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self.on_click_callback:
+            self.on_click_callback(self.rec_data)
 
 class WatchedRow(QFrame):
     def __init__(self, title, rating, parent=None):
@@ -444,9 +498,7 @@ class SimUserRow(QFrame):
         p_lbl.setProperty("cssClass", "text_light")
         lay.addWidget(p_lbl)
 
-# ============================================================================
 # DATA LOADER & THREADS
-# ============================================================================
 class LoaderThread(QThread):
     done    = pyqtSignal(object)
     error   = pyqtSignal(str)
@@ -459,7 +511,7 @@ class LoaderThread(QThread):
             loader.load_data()
             self.status.emit("Building Graph...")
             graph = BipartiteGraph()
-            loader.build_graph(graph, max_users=20, max_movies=None)
+            loader.build_graph(graph, max_users=50,max_movies=None)
             bfs = BFSTraversal(graph)
             cf  = CollaborativeFilter(graph)
             self.done.emit((graph, bfs, cf))
@@ -494,9 +546,7 @@ class RecommendThread(QThread):
         except Exception as e:
             self.error.emit(str(e))
 
-# ============================================================================
 # MATPLOTLIB GRAPH CANVAS
-# ============================================================================
 class GraphCanvas(FigureCanvas):
     def __init__(self, parent=None):
         self.fig = Figure(figsize=(6, 6), dpi=100)
@@ -520,10 +570,10 @@ class GraphCanvas(FigureCanvas):
         self.fig.patch.set_facecolor(P['bg_panel'])
 
         C_TARGET  = '#da42f5'
-        C_SIMILAR = "#60A5FA" if not P['is_dark'] else "#3B82F6" # Made slightly brighter for dark mode
+        C_SIMILAR = "#60A5FA" if not P['is_dark'] else "#3B82F6" 
         C_REC     = P['warning']
-        C_WATCHED = P['text_second'] # Darker than border for better visibility
-        C_EDGE    = P['text_second'] # Stronger color for edges
+        C_WATCHED = P['text_second'] 
+        C_EDGE    = P['text_second'] 
         C_EDGE_R  = P['primary_blue']
         C_LABEL   = P['text_primary']
 
@@ -600,9 +650,7 @@ class GraphCanvas(FigureCanvas):
         self.fig.tight_layout(pad=0.4)
         self.draw()
 
-# ============================================================================
 # MAIN APPLICATION
-# ============================================================================
 class MovieRecommenderApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -610,7 +658,7 @@ class MovieRecommenderApp(QMainWindow):
         self.setMinimumSize(1024, 720) # Responsive
         self.resize(1280, 800)
         
-        self.P = THEME_LIGHT
+        self.P = THEME_DARK
         self.setStyleSheet(get_qss(self.P))
 
         self.graph = None
@@ -635,7 +683,7 @@ class MovieRecommenderApp(QMainWindow):
         QTimer.singleShot(300, self._load_data)
 
     def _apply_theme(self):
-        """Applies current self.P to all widgets dynamically."""
+        
         self.setStyleSheet(get_qss(self.P))
         # Reforce rendering on dynamic properties
         for widget in self.findChildren(QWidget):
@@ -660,7 +708,7 @@ class MovieRecommenderApp(QMainWindow):
             self.btn_theme.setIcon(QIcon("icons/light-mode.png"))
         self._apply_theme()
 
-    # ── Login Screen ────────────────────────────────────────────────────────
+    # Login Screen 
     def _build_login_screen(self):
         self.login_widget = QWidget()
         lay = QVBoxLayout(self.login_widget)
@@ -715,6 +763,12 @@ class MovieRecommenderApp(QMainWindow):
         
         c_lay.addSpacing(25)
         
+        hint_lbl = QLabel("Tersedia User ID: 1 - 611")
+        hint_lbl.setFont(QFont("Segoe UI", 11))
+        hint_lbl.setAlignment(Qt.AlignCenter)
+        hint_lbl.setProperty("cssClass", "text_second")
+        c_lay.addWidget(hint_lbl)
+        
         self.login_inp_uid = QLineEdit()
         self.login_inp_uid.setPlaceholderText("Enter User ID (e.g. 1)")
         self.login_inp_uid.setFont(QFont("Segoe UI", 18))
@@ -736,7 +790,7 @@ class MovieRecommenderApp(QMainWindow):
         lay.addWidget(card)
         self.stacked_widget.addWidget(self.login_widget)
 
-    # ── Main Dashboard ──────────────────────────────────────────────────────
+    # Main Dashboard 
     def _build_main_dashboard(self):
         self.main_widget = QWidget()
         lay = QHBoxLayout(self.main_widget)
@@ -1050,7 +1104,7 @@ class MovieRecommenderApp(QMainWindow):
         lay.addWidget(self.txt_adj, 1)
         self.tabs.addWidget(tab)
 
-    # ── UI Interactions ─────────────────────────────────────────────────────
+    # UI Interactions 
     def _switch_tab(self, idx):
         self.tabs.setCurrentIndex(idx)
         for i, btn in enumerate(self.nav_btns):
@@ -1065,7 +1119,7 @@ class MovieRecommenderApp(QMainWindow):
         self.login_progress.setValue(100)
         QTimer.singleShot(800, lambda: self.login_progress.setValue(0))
 
-    # ── Logic ───────────────────────────────────────────────────────────────
+    # Logic 
     def _load_data(self):
         self._prog_val = 0
         self._prog_timer.start(60)
@@ -1121,6 +1175,7 @@ class MovieRecommenderApp(QMainWindow):
         
         self._thread_rec = RecommendThread(self.graph, self.bfs, self.cf, uid)
         self._thread_rec.status.connect(lambda s: self.login_status.setText(s))
+        self._thread_rec.error.connect(lambda e: self.login_status.setText(f"Error: {e}"))
         self._thread_rec.done.connect(self._on_rec_done)
         self._thread_rec.start()
 
@@ -1148,7 +1203,9 @@ class MovieRecommenderApp(QMainWindow):
             if w: w.setParent(None)
             
         for rec in recs:
-            self.rec_lay.insertWidget(self.rec_lay.count()-1, RecCard(rec['title'], rec['genres'], rec['score']))
+            card = RecCard(rec)
+            card.on_click_callback = self._show_contributors_dialog
+            self.rec_lay.insertWidget(self.rec_lay.count()-1, card)
             
         # Watched Movies
         for i in reversed(range(self.watched_lay.count())): 
@@ -1172,6 +1229,96 @@ class MovieRecommenderApp(QMainWindow):
         # Switch Screen
         self.stacked_widget.setCurrentWidget(self.main_widget)
         self._switch_tab(0)
+
+    def _show_contributors_dialog(self, rec_data):
+        contributors = rec_data.get('contributors', [])
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Rincian Rekomendasi: {rec_data.get('title')}")
+        dialog.setMinimumSize(600, 400)
+        dialog.setStyleSheet(f"""
+            QDialog {{ background: {self.P['bg_panel']}; color: {self.P['text_primary']}; }}
+            QLabel {{ color: {self.P['text_primary']}; }}
+            QTableWidget {{ 
+                background: {self.P['bg_app']}; 
+                color: {self.P['text_primary']}; 
+                border: 1px solid {self.P['border']};
+                border-radius: 8px;
+                gridline-color: {self.P['border']};
+            }}
+            QHeaderView::section {{ 
+                background: {self.P['bg_panel']}; 
+                color: {self.P['text_second']}; 
+                border: none;
+                border-bottom: 1px solid {self.P['border']};
+                font-weight: bold;
+                padding: 4px;
+            }}
+            QTableWidget::item {{ padding: 8px; }}
+        """)
+        
+        lay = QVBoxLayout(dialog)
+        lay.setContentsMargins(20, 20, 20, 20)
+        lay.setSpacing(15)
+        
+        title_lbl = QLabel(f"{rec_data.get('title')}")
+        title_lbl.setFont(QFont("Segoe UI", 16, QFont.Bold))
+        lay.addWidget(title_lbl)
+        
+        desc_lbl = QLabel(f"Top {len(contributors)} User yang merekomendasikan film ini:")
+        desc_lbl.setFont(QFont("Segoe UI", 12))
+        desc_lbl.setStyleSheet(f"color: {self.P['text_second']};")
+        lay.addWidget(desc_lbl)
+        
+        table = QTableWidget()
+        table.setColumnCount(4)
+        table.setHorizontalHeaderLabels(["User ID", "Rating", "Similarity", "Kontribusi"])
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setAlternatingRowColors(True)
+        
+        if self.P['is_dark']:
+            table.setStyleSheet(table.styleSheet() + f"QTableWidget {{ alternate-background-color: {self.P['bg_panel']}; }}")
+        else:
+            table.setStyleSheet(table.styleSheet() + f"QTableWidget {{ alternate-background-color: #F1F5F9; }}")
+            
+        table.setRowCount(len(contributors))
+        for row, c in enumerate(contributors):
+            item_id = QTableWidgetItem(f"User {c['user_id']}")
+            item_id.setTextAlignment(Qt.AlignCenter)
+            table.setItem(row, 0, item_id)
+            
+            item_rat = QTableWidgetItem(f"{c['rating']} ★")
+            item_rat.setTextAlignment(Qt.AlignCenter)
+            table.setItem(row, 1, item_rat)
+            
+            item_sim = QTableWidgetItem(f"{c['similarity']:.4f}")
+            item_sim.setTextAlignment(Qt.AlignCenter)
+            table.setItem(row, 2, item_sim)
+            
+            item_cont = QTableWidgetItem(f"{c['contribution']:.4f}")
+            item_cont.setTextAlignment(Qt.AlignCenter)
+            item_cont.setFont(QFont("Segoe UI", 10, QFont.Bold))
+            item_cont.setForeground(QColor(self.P['primary_blue']))
+            table.setItem(row, 3, item_cont)
+            
+        lay.addWidget(table)
+        
+        btn_close = QPushButton("Tutup")
+        btn_close.setFixedHeight(40)
+        btn_close.setProperty("cssClass", "btn_primary")
+        btn_close.setCursor(Qt.PointingHandCursor)
+        btn_close.clicked.connect(dialog.accept)
+        
+        btn_lay = QHBoxLayout()
+        btn_lay.addStretch()
+        btn_lay.addWidget(btn_close)
+        btn_lay.addStretch()
+        lay.addLayout(btn_lay)
+        
+        dialog.exec_()
 
     def _filter_watched_movies(self, text):
         query = text.lower()
@@ -1200,6 +1347,14 @@ class MovieRecommenderApp(QMainWindow):
         self.stacked_widget.setCurrentWidget(self.login_widget)
 
 def main():
+    
+    import traceback
+    def global_exception_handler(exc_type, exc_value, exc_traceback):
+        with open("error_log.txt", "w") as f:
+            traceback.print_exception(exc_type, exc_value, exc_traceback, file=f)
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+    sys.excepthook = global_exception_handler
+    
     app = QApplication(sys.argv)
     win = MovieRecommenderApp()
     win.show()
