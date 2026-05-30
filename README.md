@@ -71,7 +71,7 @@ python main.py
 ## Alur Algoritma (Flow Program)
 
 ```
-```text
+```alur
 Load Dataset CSV (ratings.csv & movies.csv)
 menggunakan pandas
         │
@@ -139,8 +139,8 @@ Tujuan:
 menghitung seberapa layak movie direkomendasikan
         │
         ▼
-Sorting Recommendation Score
-Urut descending berdasarkan score tertinggi
+Merge Sort Descending
+berdasarkan Recommendation Score
         │
         ▼
 Output Top-5 Recommendation
