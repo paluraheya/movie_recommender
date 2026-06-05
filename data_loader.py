@@ -50,7 +50,7 @@ class DataLoader:
 
     
     def build_graph(self, graph: BipartiteGraph,
-                    max_users: int = 50,
+                    max_users: int = None,
                     max_movies: int = None) -> BipartiteGraph:
         
        

@@ -511,7 +511,7 @@ class LoaderThread(QThread):
             loader.load_data()
             self.status.emit("Building Graph...")
             graph = BipartiteGraph()
-            loader.build_graph(graph, max_users=50,max_movies=None)
+            loader.build_graph(graph, max_users=None,max_movies=None)
             bfs = BFSTraversal(graph)
             cf  = CollaborativeFilter(graph)
             self.done.emit((graph, bfs, cf))
@@ -548,13 +548,31 @@ class RecommendThread(QThread):
 
 # MATPLOTLIB GRAPH CANVAS
 class GraphCanvas(FigureCanvas):
+    """
+    Visualisasi bipartite graph secara bertahap (step-by-step).
+    Navigasi menggunakan tombol panah kiri/kanan di luar canvas ini.
+    """
+
+    STEP_TITLES = [
+        ("Step 1 / 4", "Target User — Menampilkan film yang sudah ditonton"),
+        ("Step 2 / 4", "Similar Users — Menemukan user dengan tontonan yang sama (Co-rated)"),
+        ("Step 3 / 4", "Candidate Movies — Mengumpulkan film rekomendasi dari Similar Users"),
+        ("Step 4 / 4", "Final Output — Film dengan skor tertinggi direkomendasikan"),
+    ]
+
     def __init__(self, parent=None):
-        self.fig = Figure(figsize=(6, 6), dpi=100)
-        self.ax = self.fig.add_subplot(111)
+        self.fig = Figure(figsize=(6, 5), dpi=100)
+        self.ax  = self.fig.add_subplot(111)
         super().__init__(self.fig)
         self.setParent(parent)
+        self._step       = 0
+        self._graph_data = None
+        self._P          = None
+
+    # ── Public API ───────────────────────────────────────────────────────────
 
     def _draw_empty(self, P):
+        self._P = P
         self.ax.clear()
         self.ax.set_facecolor(P['bg_panel'])
         self.fig.patch.set_facecolor(P['bg_panel'])
@@ -564,90 +582,316 @@ class GraphCanvas(FigureCanvas):
         self.ax.axis('off')
         self.draw()
 
-    def draw_graph(self, graph, target_uid, sim_scores, recs, P):
+    def load_graph(self, graph, target_uid, sim_scores, recs, P, candidates=None, sim_raw=None):
+        """Simpan semua data, reset ke step 0, lalu render."""
+        self._P    = P
+        self._step = 0
+
+        self.step_top_movies = []
+        sim_users = [u for u, _ in sim_scores[:5]]
+        
+        from algorithms import CollaborativeFilter
+        cf = CollaborativeFilter(graph)
+        
+        for s in range(6):
+            if s == 0 or not candidates:
+                self.step_top_movies.append([])
+                continue
+            if s == 1: active_sims = sim_users[:1]
+            elif s == 2: active_sims = sim_users[:2]
+            elif s == 3: active_sims = sim_users[:3]
+            else: active_sims = sim_users[:5]
+            
+            if s == 5:
+                self.step_top_movies.append(recs)
+                continue
+                
+            active_sim_scores = [(u, sim) for u, sim in sim_scores if u in active_sims]
+            step_recs = cf.get_recommendations(target_uid, active_sim_scores, candidates, top_n=8)
+            self.step_top_movies.append(step_recs)
+
+        rec_ids  = [r['movie_id'] for r in recs]
+        rec_set  = set(rec_ids)
+        rec_info = {r['movie_id']: r for r in recs}
+
+        target_watched_list = list(graph.get_user_movies(target_uid).keys())
+        target_watched_set = set(target_watched_list)
+        
+        # Count how many similar users watched each target movie
+        movie_sim_counts = {}
+        for m in target_watched_set:
+            if m in rec_set:
+                continue
+            count = sum(1 for u in sim_users if m in graph.get_user_movies(u))
+            if count > 0:
+                movie_sim_counts[m] = count
+                
+        # Sort by most shared, then take top 5
+        sorted_shared = sorted(movie_sim_counts.keys(), key=lambda x: movie_sim_counts[x], reverse=True)
+        ctx_ids = sorted_shared[:5]
+        
+        # Pad with other watched movies if we have less than 5
+        if len(ctx_ids) < 5:
+            for m in target_watched_list:
+                if m not in rec_set and m not in ctx_ids:
+                    ctx_ids.append(m)
+                if len(ctx_ids) == 5:
+                    break
+        
+        all_movies = set(rec_ids + ctx_ids)
+        if len(self.step_top_movies) > 4:
+            for r in self.step_top_movies[4]:
+                all_movies.add(r['movie_id'])
+                if r['movie_id'] not in rec_info:
+                    rec_info[r['movie_id']] = r
+                    
+        movie_list = list(all_movies)
+
+        sim_users = [u for u, _ in sim_scores[:5]]
+
+        PAD = 0.12
+        def _x(i, n):
+            return (PAD + (1 - 2*PAD) / max(n - 1, 1) * i) if n > 1 else 0.5
+
+        n_u = 1 + len(sim_users)
+        n_m = len(movie_list)
+        all_users = [target_uid] + sim_users
+        upos = {u: (_x(i, n_u), 0.90) for i, u in enumerate(all_users)}
+        mpos = {m: (_x(i, n_m), 0.12) for i, m in enumerate(movie_list)}
+
+        self._graph_data = dict(
+            graph        = graph,
+            target_uid   = target_uid,
+            sim_users    = sim_users,
+            sim_scores   = dict(sim_scores),
+            rec_set      = rec_set,
+            rec_info     = rec_info,
+            movie_list   = movie_list,
+            ctx_ids      = set(ctx_ids),
+            upos         = upos,
+            mpos         = mpos,
+            sim_raw      = sim_raw,
+        )
+        self._render_step()
+
+    def go_next(self):
+        if self._graph_data and self._step < len(self.STEP_TITLES) - 1:
+            self._step += 1
+            self._render_step()
+
+    def go_prev(self):
+        if self._graph_data and self._step > 0:
+            self._step -= 1
+            self._render_step()
+
+    @property
+    def current_step(self):
+        return self._step
+
+    @property
+    def total_steps(self):
+        return len(self.STEP_TITLES)
+
+    # ── Internal render ──────────────────────────────────────────────────────
+
+    def _render_step(self):
+        if not self._graph_data:
+            return
+        P  = self._P
+        d  = self._graph_data
+        s  = self._step
+
+        C_TARGET  = '#da42f5'
+        C_SIMILAR = '#60A5FA' if not P['is_dark'] else '#3B82F6'
+        C_REC     = P['warning']
+        C_WATCHED = P['text_second']
+        C_EDGE_W  = P['text_second']
+        C_EDGE_R  = P['primary_blue']
+        C_LABEL   = P['text_primary']
+        C_DIM     = P['border']
+
         self.ax.clear()
         self.ax.set_facecolor(P['bg_panel'])
         self.fig.patch.set_facecolor(P['bg_panel'])
 
-        C_TARGET  = '#da42f5'
-        C_SIMILAR = "#60A5FA" if not P['is_dark'] else "#3B82F6" 
-        C_REC     = P['warning']
-        C_WATCHED = P['text_second'] 
-        C_EDGE    = P['text_second'] 
-        C_EDGE_R  = P['primary_blue']
-        C_LABEL   = P['text_primary']
+        graph      = d['graph']
+        target_uid = d['target_uid']
+        sim_users  = d['sim_users']
+        sim_scores = d['sim_scores']
+        rec_set    = d['rec_set']
+        rec_info   = d['rec_info']
+        movie_list = d['movie_list']
+        ctx_ids    = d['ctx_ids'] # Target's watched movies (subset shown in graph)
+        upos       = d['upos']
+        mpos       = d['mpos']
 
-        rec_ids    = [r['movie_id'] for r in recs]
-        rec_set    = set(rec_ids)
-        rec_score  = {r['movie_id']: r['score'] for r in recs}
-        target_w   = list(graph.get_user_movies(target_uid).keys())
-        ctx_ids    = [m for m in target_w if m not in rec_set][:4]
-        movie_list = rec_ids + ctx_ids
+        # Determine active elements based on the 4 steps
+        if s == 0:
+            active_users = [target_uid]
+            active_movies = ctx_ids
+        elif s == 1:
+            active_users = [target_uid] + sim_users
+            active_movies = ctx_ids
+        elif s == 2:
+            active_users = sim_users
+            active_movies = set(movie_list) - ctx_ids
+        else:
+            active_users = sim_users
+            active_movies = rec_set
 
-        display_u  = [target_uid] + [u for u, _ in sim_scores[:5]]
-        n_u, n_m   = len(display_u), len(movie_list)
-        if n_m == 0:
-            self._draw_empty(P); return
-
-        YU, YM = 0.85, 0.15
-        PAD = 0.1
-        def _x(i, n): return (PAD + (1-2*PAD)/(max(n-1,1))*i) if n>1 else 0.5
-
-        upos = {u: (_x(i, n_u), YU) for i,u in enumerate(display_u)}
-        mpos = {m: (_x(i, n_m), YM) for i,m in enumerate(movie_list)}
-
-        for uid in display_u:
+        # ── Edges ─────────────────────────────────────────────────────────
+        for uid in [target_uid] + sim_users:
             ux, uy = upos[uid]
-            um     = graph.get_user_movies(uid)
-            for mid, r in um.items():
-                if mid not in mpos: continue
-                mx, my   = mpos[mid]
-                is_rec   = mid in rec_set
-                if is_rec:
-                    lw = 1.0 + (r/5)*2.5
-                    self.ax.plot([ux,mx],[uy,my],'-', color=C_EDGE_R, lw=lw, alpha=0.7, zorder=3)
+            
+            # Hide edges for inactive users to avoid clutter
+            if uid not in active_users:
+                continue
+
+            for mid, r in graph.get_user_movies(uid).items():
+                if mid not in mpos:
+                    continue
+                if mid not in active_movies:
+                    continue
+
+                mx, my = mpos[mid]
+                is_rec = mid in rec_set
+                
+                # Edge Highlight Logic
+                if s == 3 and uid in sim_users and is_rec:
+                    lw, color, alpha, zo = 1.5 + (r/5)*2.0, C_EDGE_R, 0.85, 4
+                elif s == 1 and uid in sim_users and mid in ctx_ids:
+                    lw, color, alpha, zo = 1.5, C_SIMILAR, 0.6, 3
+                elif s == 0 and uid == target_uid:
+                    lw, color, alpha, zo = 1.5, C_TARGET, 0.6, 3
+                elif s == 2 and uid in sim_users:
+                    lw, color, alpha, zo = 1.0, C_EDGE_W, 0.4, 2
                 else:
-                    self.ax.plot([ux,mx],[uy,my],'-', color=C_EDGE, lw=1.2, alpha=0.6, zorder=1)
+                    lw, color, alpha, zo = 0.5, C_DIM, 0.1, 1
 
-        # Draw nodes
-        for uid, (x, y) in upos.items():
-            is_t = uid == target_uid
-            c = C_TARGET if is_t else C_SIMILAR
-            sz = 400 if is_t else 200
-            self.ax.scatter(x, y, s=sz, c=c, zorder=6, edgecolors=P['bg_panel'], linewidths=1.5)
-            lbl = f"U{uid}"
-            self.ax.text(x, y+0.06, lbl, fontsize=9, color=C_LABEL,
-                         ha='center', va='bottom', fontweight='bold' if is_t else 'normal', zorder=7)
+                if s == 1 and uid in sim_users:
+                    start_pos = (mx, my)
+                    end_pos = (ux, uy)
+                else:
+                    start_pos = (ux, uy)
+                    end_pos = (mx, my)
 
-        for i, mid in enumerate(movie_list):
-            x, y = mpos[mid]
-            info  = graph.movie_info.get(mid, {})
-            title = info.get('title', f'Movie {mid}')
+                if alpha > 0.15:
+                    self.ax.annotate('', xy=end_pos, xytext=start_pos,
+                                     arrowprops=dict(arrowstyle="->", color=color, lw=lw, alpha=alpha,
+                                                     shrinkA=15, shrinkB=15),
+                                     zorder=zo)
+
+        # ── Node film ─────────────────────────────────────────────────────
+        for mid in movie_list:
+            x, y   = mpos[mid]
+            info   = graph.movie_info.get(mid, {})
+            title  = info.get('title', f'Movie {mid}')
             is_rec = mid in rec_set
-            c = C_REC if is_rec else C_WATCHED
-            sz = 300 if is_rec else 150
-            self.ax.scatter(x, y, s=sz, c=c, marker='o' if is_rec else 's',
-                            zorder=6, edgecolors=P['bg_panel'], linewidths=1)
-            short = title[:15]+"…" if len(title)>15 else title
-            self.ax.text(x, y-0.04, short, fontsize=8, color=C_LABEL,
-                         ha='center', va='top', fontweight='bold' if is_rec else 'normal', zorder=7)
+            short  = (title[:11] + '…') if len(title) > 11 else title
 
-        # Add Legend
-        patch_target = mpatches.Patch(color=C_TARGET, label='Target User')
-        patch_sim = mpatches.Patch(color=C_SIMILAR, label='Similar User')
-        patch_rec = mpatches.Patch(color=C_REC, label='Recommended')
-        patch_watch = mpatches.Patch(color=C_WATCHED, label='Watched')
-        
-        leg = self.ax.legend(handles=[patch_target, patch_sim, patch_rec, patch_watch], 
-                             loc='upper center', bbox_to_anchor=(0.5, 1.07),
-                             ncol=4, frameon=False, fontsize=9)
-        for text in leg.get_texts():
-            text.set_color(C_LABEL)
+            # Check if node is active
+            if s == 0 or s == 1:
+                is_active = mid in ctx_ids
+            elif s == 2:
+                is_active = mid not in ctx_ids
+            elif s == 3:
+                is_active = is_rec
+            else:
+                is_active = True
+
+            if is_active:
+                if s == 3 and is_rec:
+                    c, sz, alpha = C_REC, 320, 1.0
+                    score = rec_info[mid]['score']
+                    self.ax.text(x, y + 0.07, f'★{score:.2f}',
+                                 fontsize=7, color=C_REC, ha='center',
+                                 va='bottom', fontweight='bold', zorder=8)
+                elif s == 2:
+                    c, sz, alpha = P['primary_blue'], 180, 0.8
+                else:
+                    c = C_WATCHED if mid in ctx_ids else C_DIM
+                    sz = 160
+                    alpha = 0.9
+            else:
+                c, sz, alpha = C_DIM, 100, 0.2
+
+            self.ax.scatter(x, y, s=sz, c=c, alpha=alpha,
+                            marker='o' if (is_rec and s == 3) else 's',
+                            zorder=6, edgecolors=P['bg_panel'], linewidths=1)
+            
+            fa = 1.0 if is_active else 0.2
+            self.ax.text(x, y - 0.07, short, fontsize=7, color=C_LABEL,
+                         ha='right', va='top', alpha=fa, rotation=45,
+                         fontweight='bold' if (is_active and s==3) else 'normal', zorder=7)
+
+        # ── Node user ─────────────────────────────────────────────────────
+        for uid in [target_uid] + sim_users:
+            x, y   = upos[uid]
+            is_t   = uid == target_uid
+            
+            if s == 0:
+                is_active = is_t
+            elif s == 1:
+                is_active = True
+            elif s == 2:
+                is_active = not is_t
+            elif s == 3:
+                is_active = not is_t
+            else:
+                is_active = True
+
+            if is_t:
+                c, sz, alpha = C_TARGET, 420, 1.0 if is_active else 0.2
+            else:
+                c, sz, alpha = C_SIMILAR, 220, 1.0 if is_active else 0.2
+
+            self.ax.scatter(x, y, s=sz, c=c, alpha=alpha, zorder=6,
+                            edgecolors=P['bg_panel'], linewidths=1.5)
+
+            lbl = f"U{uid}"
+            if not is_t:
+                lbl = f"U{uid} | {sim_scores.get(uid, 0):.2f}"
+            fa = 1.0 if is_active else 0.2
+            self.ax.text(x, y + 0.06, lbl, fontsize=8, color=C_LABEL,
+                         ha='center', va='bottom', alpha=fa,
+                         fontweight='bold' if is_active else 'normal',
+                         zorder=7)
+
+        # ── Label sisi USER / FILM ────────────────────────────────────────
+        self.ax.text(0.01, 0.90, 'USER', fontsize=9, color=C_LABEL,
+                     va='center', ha='left', alpha=0.45,
+                     fontweight='bold', transform=self.ax.transAxes)
+        self.ax.text(0.01, 0.12, 'FILM', fontsize=9, color=C_LABEL,
+                     va='center', ha='left', alpha=0.45,
+                     fontweight='bold', transform=self.ax.transAxes)
+
+        # ── Garis pemisah bipartite ────────────────────────────────────────
+        self.ax.axhline(y=0.52, color=C_DIM, linewidth=0.6,
+                        linestyle='--', alpha=0.4, zorder=0)
+
+        # ── Legend ────────────────────────────────────────────────────────
+        handles = [
+            mpatches.Patch(color=C_TARGET,  label='Target User'),
+            mpatches.Patch(color=C_SIMILAR, label='Similar User'),
+            mpatches.Patch(color=C_REC,     label='Rekomendasi'),
+            mpatches.Patch(color=C_WATCHED, label='Sudah Ditonton'),
+        ]
+        leg = self.ax.legend(handles=handles, loc='upper center',
+                             bbox_to_anchor=(0.5, 1.08), ncol=4,
+                             frameon=False, fontsize=8)
+        for t in leg.get_texts():
+            t.set_color(C_LABEL)
+
+        # ── Deskripsi step di bawah ───────────────────────────────────────
+        _, step_desc = self.STEP_TITLES[s]
+        self.ax.text(0.5, 0.01, step_desc, fontsize=9, color=C_LABEL,
+                     ha='center', va='bottom', alpha=0.7,
+                     transform=self.ax.transAxes, style='italic')
 
         self.ax.set_xlim(-0.05, 1.05)
-        self.ax.set_ylim(-0.05, 1.1)
+        self.ax.set_ylim(-0.25, 1.15)
         self.ax.axis('off')
-        self.fig.tight_layout(pad=0.4)
+        self.fig.tight_layout(pad=0.5)
         self.draw()
 
 # MAIN APPLICATION
@@ -693,9 +937,11 @@ class MovieRecommenderApp(QMainWindow):
         # Redraw graph canvas properly
         if self.cur_uid is not None and self.is_loaded and self.last_result:
             res = self.last_result
-            self.graph_canvas.draw_graph(self.graph, res['uid'], res['sim_scores'], res['recs'], self.P)
+            self.graph_canvas.load_graph(self.graph, res['uid'], res['sim_scores'], res['recs'], self.P, res.get('candidates'), res.get('sim_raw'))
+            self._update_graph_nav()
         else:
             self.graph_canvas._draw_empty(self.P)
+            self._update_graph_nav()
 
     def _toggle_theme(self):
         if self.P['is_dark']:
@@ -1050,7 +1296,8 @@ class MovieRecommenderApp(QMainWindow):
         tab = QWidget()
         lay = QVBoxLayout(tab)
         lay.setContentsMargins(40, 30, 40, 30)
-        
+
+        # ── Header ──────────────────────────────────────────────────────────
         h_lay = QHBoxLayout()
         h1_ic = QLabel()
         h1_ic.setPixmap(QPixmap("icons/data-analytics.png").scaled(24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation))
@@ -1059,28 +1306,115 @@ class MovieRecommenderApp(QMainWindow):
         h1.setProperty("cssClass", "text_primary")
         h_lay.addWidget(h1_ic)
         h_lay.addWidget(h1)
-        
         h_lay.addStretch()
-        
-        # Stats Labels
-        self.lbl_stat_users = QLabel("Users: 0")
-        self.lbl_stat_users.setProperty("cssClass", "text_second")
+
+        self.lbl_stat_users  = QLabel("Users: 0")
         self.lbl_stat_movies = QLabel("Movies: 0")
-        self.lbl_stat_movies.setProperty("cssClass", "text_second")
-        self.lbl_stat_edges = QLabel("Edges: 0")
-        self.lbl_stat_edges.setProperty("cssClass", "text_second")
-        
+        self.lbl_stat_edges  = QLabel("Edges: 0")
         for lbl in (self.lbl_stat_users, self.lbl_stat_movies, self.lbl_stat_edges):
             lbl.setFont(QFont("Segoe UI", 12, QFont.Bold))
+            lbl.setProperty("cssClass", "text_second")
             h_lay.addWidget(lbl)
             h_lay.addSpacing(15)
-            
         lay.addLayout(h_lay)
-        lay.addSpacing(10)
+        lay.addSpacing(8)
+
+        # ── Step label ──────────────────────────────────────────────────────
+        self.lbl_step = QLabel("Generate recommendations to start")
+        self.lbl_step.setAlignment(Qt.AlignCenter)
+        self.lbl_step.setFont(QFont("Segoe UI", 11, QFont.Bold))
+        self.lbl_step.setProperty("cssClass", "text_primary")
+        lay.addWidget(self.lbl_step)
+        lay.addSpacing(4)
+
+        # ── Canvas + Sidebar Layout ─────────────────────────────────────────
+        main_h_lay = QHBoxLayout()
+        main_h_lay.setSpacing(15)
+
+        left_w = QWidget()
+        left_lay = QVBoxLayout(left_w)
+        left_lay.setContentsMargins(0, 0, 0, 0)
         
+        canvas_row = QHBoxLayout()
+        canvas_row.setSpacing(0)
+
+        self.btn_graph_prev = QPushButton("❮")
+        self.btn_graph_prev.setFixedSize(44, 44)
+        self.btn_graph_prev.setFont(QFont("Segoe UI", 16))
+        self.btn_graph_prev.setEnabled(False)
+        self.btn_graph_prev.clicked.connect(self._graph_prev)
+        self.btn_graph_prev.setStyleSheet(
+            "QPushButton { border-radius: 22px; background: transparent; }"
+            "QPushButton:hover:enabled { background: rgba(83,74,183,0.15); }"
+            "QPushButton:disabled { color: #aaa; }"
+        )
+
         self.graph_canvas = GraphCanvas()
         self.graph_canvas.setProperty("cssClass", "card")
-        lay.addWidget(self.graph_canvas, 1)
+
+        self.btn_graph_next = QPushButton("❯")
+        self.btn_graph_next.setFixedSize(44, 44)
+        self.btn_graph_next.setFont(QFont("Segoe UI", 16))
+        self.btn_graph_next.setEnabled(False)
+        self.btn_graph_next.clicked.connect(self._graph_next)
+        self.btn_graph_next.setStyleSheet(
+            "QPushButton { border-radius: 22px; background: transparent; }"
+            "QPushButton:hover:enabled { background: rgba(83,74,183,0.15); }"
+            "QPushButton:disabled { color: #aaa; }"
+        )
+
+        canvas_row.addWidget(self.btn_graph_prev, 0, Qt.AlignVCenter)
+        canvas_row.addWidget(self.graph_canvas, 1)
+        canvas_row.addWidget(self.btn_graph_next, 0, Qt.AlignVCenter)
+        left_lay.addLayout(canvas_row, 1)
+
+        # ── Dot indikator step ──────────────────────────────────────────────
+        dots_lay = QHBoxLayout()
+        dots_lay.setAlignment(Qt.AlignCenter)
+        dots_lay.setSpacing(8)
+        self._step_dots = []
+        for i in range(len(GraphCanvas.STEP_TITLES)):
+            dot = QLabel("●")
+            dot.setFont(QFont("Segoe UI", 10))
+            dot.setAlignment(Qt.AlignCenter)
+            dots_lay.addWidget(dot)
+            self._step_dots.append(dot)
+        left_lay.addLayout(dots_lay)
+        left_lay.addSpacing(4)
+        main_h_lay.addWidget(left_w, 3)
+        
+        # ── Sidebar ─────────────────────────────────────────────────────────
+        right_w = QFrame()
+        right_w.setFixedWidth(260)
+        right_w.setProperty("cssClass", "panel")
+        right_lay = QVBoxLayout(right_w)
+        right_lay.setContentsMargins(15, 15, 15, 15)
+        
+        self.lbl_sb = QLabel("Top Candidates")
+        self.lbl_sb.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        self.lbl_sb.setProperty("cssClass", "text_primary")
+        self.lbl_sb.setAlignment(Qt.AlignCenter)
+        right_lay.addWidget(self.lbl_sb)
+        
+        scr_sb = QScrollArea()
+        scr_sb.setWidgetResizable(True)
+        scr_sb.setFrameShape(QFrame.NoFrame)
+        scr_sb.setStyleSheet("background: transparent;")
+        
+        self.step_recs_container = QWidget()
+        self.step_recs_container.setStyleSheet("background: transparent;")
+        self.step_recs_lay = QVBoxLayout(self.step_recs_container)
+        self.step_recs_lay.setContentsMargins(0, 0, 0, 0)
+        self.step_recs_lay.setSpacing(5)
+        self.step_recs_lay.addStretch()
+        scr_sb.setWidget(self.step_recs_container)
+        
+        right_lay.addWidget(scr_sb)
+        main_h_lay.addWidget(right_w, 1)
+        
+        lay.addLayout(main_h_lay, 1)
+
+        self._update_graph_nav()
         self.tabs.addWidget(tab)
 
     def _build_tab_adj(self):
@@ -1109,6 +1443,147 @@ class MovieRecommenderApp(QMainWindow):
         self.tabs.setCurrentIndex(idx)
         for i, btn in enumerate(self.nav_btns):
             btn.set_active(i == idx)
+
+    def _graph_next(self):
+        self.graph_canvas.go_next()
+        self._update_graph_nav()
+
+    def _graph_prev(self):
+        self.graph_canvas.go_prev()
+        self._update_graph_nav()
+
+    def _update_graph_nav(self):
+        """Perbarui tombol panah, label step, dan dot indikator."""
+        has_data = self.graph_canvas._graph_data is not None
+        cur      = self.graph_canvas.current_step
+        total    = self.graph_canvas.total_steps
+
+        self.btn_graph_prev.setEnabled(has_data and cur > 0)
+        self.btn_graph_next.setEnabled(has_data and cur < total - 1)
+
+        if has_data:
+            lbl, _ = GraphCanvas.STEP_TITLES[cur]
+            self.lbl_step.setText(lbl)
+        else:
+            self.lbl_step.setText("Generate recommendations to start")
+
+        if hasattr(self, 'step_recs_lay'):
+            for i in reversed(range(self.step_recs_lay.count() - 1)):
+                w = self.step_recs_lay.itemAt(i).widget()
+                if w: w.setParent(None)
+                
+            if has_data and hasattr(self.graph_canvas, '_graph_data'):
+                d = self.graph_canvas._graph_data
+                if cur == 0:
+                    self.lbl_sb.setText("Watched Movies")
+                    target_movies = d['graph'].get_user_movies(d['target_uid'])
+                    sorted_movies = sorted(target_movies.items(), key=lambda x: x[1], reverse=True)[:10]
+                    for idx, (mid, rating) in enumerate(sorted_movies):
+                        info = d['graph'].movie_info.get(mid, {})
+                        title = info.get('title', f'Movie {mid}')
+                        row = QFrame()
+                        row.setFixedHeight(45)
+                        row.setStyleSheet("background: transparent; border-bottom: 1px solid #334155;")
+                        r_lay = QHBoxLayout(row)
+                        r_lay.setContentsMargins(5, 5, 5, 5)
+                        short_title = (title[:18] + '..') if len(title) > 18 else title
+                        t_lbl = QLabel(f"{idx+1}. {short_title}")
+                        t_lbl.setFont(QFont("Segoe UI", 10, QFont.Bold))
+                        t_lbl.setProperty("cssClass", "text_primary")
+                        s_lbl = QLabel(f"★ {rating}")
+                        s_lbl.setFont(QFont("Segoe UI", 10))
+                        s_lbl.setProperty("cssClass", "text_second")
+                        r_lay.addWidget(t_lbl, 1)
+                        r_lay.addWidget(s_lbl, 0)
+                        self.step_recs_lay.insertWidget(self.step_recs_lay.count()-1, row)
+                elif cur == 1:
+                    self.lbl_sb.setText("Top Similar Users")
+                    sim_users = d['sim_users']
+                    sim_scores = d['sim_scores']
+                    sim_raw = d.get('sim_raw', {})
+                    for idx, uid in enumerate(sim_users):
+                        score = sim_scores.get(uid, 0)
+                        co_rated = sim_raw.get(uid, 0)
+                        row = QFrame()
+                        row.setFixedHeight(45)
+                        row.setStyleSheet("background: transparent; border-bottom: 1px solid #334155;")
+                        r_lay = QHBoxLayout(row)
+                        r_lay.setContentsMargins(5, 5, 5, 5)
+                        t_lbl = QLabel(f"{idx+1}. User {uid}")
+                        t_lbl.setFont(QFont("Segoe UI", 10, QFont.Bold))
+                        t_lbl.setProperty("cssClass", "text_primary")
+                        v_lay = QVBoxLayout()
+                        v_lay.setSpacing(0)
+                        s_lbl = QLabel(f"Sim: {score:.2f}")
+                        s_lbl.setFont(QFont("Segoe UI", 9))
+                        s_lbl.setProperty("cssClass", "text_blue")
+                        s_lbl.setAlignment(Qt.AlignRight)
+                        c_lbl = QLabel(f"Co-rated: {co_rated}")
+                        c_lbl.setFont(QFont("Segoe UI", 8))
+                        c_lbl.setProperty("cssClass", "text_light")
+                        c_lbl.setAlignment(Qt.AlignRight)
+                        v_lay.addWidget(s_lbl)
+                        v_lay.addWidget(c_lbl)
+                        r_lay.addWidget(t_lbl, 1)
+                        r_lay.addLayout(v_lay, 0)
+                        self.step_recs_lay.insertWidget(self.step_recs_lay.count()-1, row)
+                elif cur == 2:
+                    self.lbl_sb.setText("Candidate Movies")
+                    # show top candidate movies overall across the 5 similar users (without target watched)
+                    if hasattr(self.graph_canvas, 'step_top_movies') and len(self.graph_canvas.step_top_movies) > 4:
+                        candidates = self.graph_canvas.step_top_movies[4] # step 4 had the recs generated by all 5 sim users
+                    else:
+                        candidates = []
+                    for idx, movie in enumerate(candidates):
+                        row = QFrame()
+                        row.setFixedHeight(45)
+                        row.setStyleSheet("background: transparent; border-bottom: 1px solid #334155;")
+                        r_lay = QHBoxLayout(row)
+                        r_lay.setContentsMargins(5, 5, 5, 5)
+                        title = movie['title']
+                        short_title = (title[:18] + '..') if len(title) > 18 else title
+                        t_lbl = QLabel(f"{idx+1}. {short_title}")
+                        t_lbl.setFont(QFont("Segoe UI", 10, QFont.Bold))
+                        t_lbl.setProperty("cssClass", "text_primary")
+                        s_lbl = QLabel(f"★ {movie['score']:.2f}")
+                        s_lbl.setFont(QFont("Segoe UI", 10))
+                        s_lbl.setProperty("cssClass", "text_warning" if 'text_warning' in self.P else "text_blue")
+                        s_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                        r_lay.addWidget(t_lbl, 1)
+                        r_lay.addWidget(s_lbl, 0)
+                        self.step_recs_lay.insertWidget(self.step_recs_lay.count()-1, row)
+                elif cur == 3:
+                    self.lbl_sb.setText("Top Recommendations")
+                    recs = d.get('rec_info', {}).values()
+                    sorted_recs = sorted(recs, key=lambda x: x['score'], reverse=True)[:5]
+                    for idx, movie in enumerate(sorted_recs):
+                        row = QFrame()
+                        row.setFixedHeight(45)
+                        row.setStyleSheet("background: transparent; border-bottom: 1px solid #334155;")
+                        r_lay = QHBoxLayout(row)
+                        r_lay.setContentsMargins(5, 5, 5, 5)
+                        title = movie['title']
+                        short_title = (title[:18] + '..') if len(title) > 18 else title
+                        t_lbl = QLabel(f"{idx+1}. {short_title}")
+                        t_lbl.setFont(QFont("Segoe UI", 10, QFont.Bold))
+                        t_lbl.setProperty("cssClass", "text_primary")
+                        s_lbl = QLabel(f"★ {movie['score']:.2f}")
+                        s_lbl.setFont(QFont("Segoe UI", 10))
+                        s_lbl.setProperty("cssClass", "text_danger")
+                        s_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                        r_lay.addWidget(t_lbl, 1)
+                        r_lay.addWidget(s_lbl, 0)
+                        self.step_recs_lay.insertWidget(self.step_recs_lay.count()-1, row)
+
+        for i, dot in enumerate(self._step_dots):
+            if not has_data:
+                dot.setStyleSheet("color: #cccccc;")
+            elif i == cur:
+                dot.setStyleSheet("color: #534AB7; font-size: 13px;")
+            elif i < cur:
+                dot.setStyleSheet("color: #534AB7; opacity: 0.5;")
+            else:
+                dot.setStyleSheet("color: #cccccc;")
 
     def _tick_progress(self):
         self._prog_val = min(self._prog_val + 3, 90)
@@ -1142,6 +1617,7 @@ class MovieRecommenderApp(QMainWindow):
         self.login_inp_uid.setEnabled(True)
         self.login_btn.setEnabled(True)
         self.graph_canvas._draw_empty(self.P)
+        self._update_graph_nav()
         
         # Populate Stats
         if hasattr(self.graph, 'get_stats'):
@@ -1218,7 +1694,10 @@ class MovieRecommenderApp(QMainWindow):
             self.watched_lay.insertWidget(self.watched_lay.count()-1, WatchedRow(short, rating))
             
         # Graph & Adj
-        self.graph_canvas.draw_graph(self.graph, uid, sim_scores, recs, self.P)
+        candidates = result['candidates']
+        sim_raw = result['sim_raw']
+        self.graph_canvas.load_graph(self.graph, uid, sim_scores, recs, self.P, candidates, sim_raw)
+        self._update_graph_nav()
         self.txt_adj.setPlainText(self.graph.get_adjacency_list_str(uid, limit=20))
 
         # Reset button state safely
