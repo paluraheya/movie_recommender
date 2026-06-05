@@ -499,7 +499,9 @@ class SimUserRow(QFrame):
         lay.addWidget(p_lbl)
 
 # DATA LOADER & THREADS
+# Menjalankan proses loading data secara asinkron agar UI tidak hang (freeze)
 class LoaderThread(QThread):
+    # Sinyal untuk berkomunikasi dengan UI utama
     done    = pyqtSignal(object)
     error   = pyqtSignal(str)
     status  = pyqtSignal(str)
@@ -508,16 +510,22 @@ class LoaderThread(QThread):
         try:
             self.status.emit("Loading dataset...")
             loader = DataLoader()
-            loader.load_data()
+            loader.load_data() # Membaca file CSV
+            
             self.status.emit("Building Graph...")
             graph = BipartiteGraph()
-            loader.build_graph(graph, max_users=None,max_movies=None)
+            loader.build_graph(graph, max_users=None,max_movies=None) # Membangun graph
+            
+            # Inisialisasi algoritma
             bfs = BFSTraversal(graph)
             cf  = CollaborativeFilter(graph)
+            
+            # Kirim hasil kembali ke UI
             self.done.emit((graph, bfs, cf))
         except Exception as e:
             self.error.emit(str(e))
 
+# Thread untuk menjalankan algoritma rekomendasi agar komputasi berat tidak memblokir UI
 class RecommendThread(QThread):
     done   = pyqtSignal(object)
     error  = pyqtSignal(str)
@@ -530,14 +538,24 @@ class RecommendThread(QThread):
     def run(self):
         try:
             uid = self.uid
+            
+            # Langkah 1: Temukan user lain yang mirip (co-rated) menggunakan BFS
             self.status.emit("Running BFS traversal...")
             sim_raw, visited = self.bfs.find_similar_users(uid, max_depth=2)
+            
+            # Langkah 2: Hitung skor Cosine Similarity untuk Top-K User
             self.status.emit("Calculating similarity...")
             sim_scores = self.cf.get_top_similar_users(uid, sim_raw.keys(), top_k=10)
+            
+            # Langkah 3: Ambil semua film yang pernah ditonton similar users tapi belum ditonton target user
             self.status.emit("Finding candidates...")
             candidates = self.bfs.get_candidate_movies(uid, dict(sim_scores))
+            
+            # Langkah 4: Hitung skor rekomendasi untuk mendapatkan Top-N film
             self.status.emit("Scoring...")
             recs = self.cf.get_recommendations(uid, sim_scores, candidates, top_n=5)
+            
+            # Kirim semua data hasil kembali ke UI untuk ditampilkan
             self.done.emit({
                 'uid': uid, 'sim_scores': sim_scores,
                 'recs': recs, 'visited': visited,
